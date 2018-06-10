@@ -20,5 +20,5 @@ def load_data(data_path, n_plants, resample_rule=None):
 
             data[i] = data[i]['85m_speed'].values
 
-    data = np.stack(data, axis=1)
+    data = np.stack(data, axis=0)
     return data
