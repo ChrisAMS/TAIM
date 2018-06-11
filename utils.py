@@ -28,6 +28,8 @@ def load_data(data_path, n_plants, p, resample_rule=None):
             # print(data[i].shape)
 
     data = np.stack(data, axis=0)
+
+    print(data.shape)
     
     # test = data
     
