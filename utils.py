@@ -3,7 +3,7 @@ import numpy as np
 import os
 
 
-def load_data(data_path, n_plants, p, resample_rule=None):
+def load_data(data_path, n_plants, p, resample_rule='10T', n_rows=None):
     """
     data_path: directory where the data is saved.
     n_plants: number of plants to load (K).
@@ -18,9 +18,11 @@ def load_data(data_path, n_plants, p, resample_rule=None):
             print('File "{}" loaded!'.format(file_name))
             data[i] = pd.read_csv(os.path.join(data_path, file_name),\
                                   index_col=0, names=['85m_speed'], parse_dates=True)
-            if resample_rule:
-                data[i] = data[i].resample(resample_rule).mean().interpolate(method='time')
-                # test[i] = data[i]
+            
+            print('Original shape: {}'.format(data[i].shape))
+
+            data[i] = data[i].resample(resample_rule).mean().interpolate(method='time')
+            # test[i] = data[i]
 
             data[i] = data[i]['85m_speed'].values
             nans = 0
@@ -28,7 +30,12 @@ def load_data(data_path, n_plants, p, resample_rule=None):
                 if np.isnan(data[i][j]):
                     nans += 1
             print('nans: {}'.format(nans))
-            print(data[i].shape)
+            print('Resample data shape: {}'.format(data[i].shape))
+            
+            if n_rows:
+                data[i] = data[i][:n_rows]
+                
+            print('Final shape: {}'.format(data[i].shape))
 
     data = np.stack(data, axis=0)
     
