@@ -2,34 +2,42 @@ import pandas as pd
 import numpy as np
 import os
 
-## Hello world
 
-def load_data(data_path, n_plants, p, resample_rule=None):
+def load_data(data_path, n_plants, p, resample_rule='10T', n_rows=None):
     """
     data_path: directory where the data is saved.
     n_plants: number of plants to load (K).
     resample: resample rule for data aggregation.
-
-    Return:
-     - data: Y0
-     - X (book X expression)
     """
     data = [None] * n_plants
+    # test = [None] * n_plants
     for path, _, file_names in os.walk(data_path):
         for i, file_name in enumerate(file_names):
             if i + 1 > n_plants:
                 break
-            data[i] = pd.read_csv(os.path.join(data_path, 'plant_{}'.format(i)),\
+            print('File "{}" loaded!'.format(file_name))
+            data[i] = pd.read_csv(os.path.join(data_path, file_name),\
                                   index_col=0, names=['85m_speed'], parse_dates=True)
-            if resample_rule:
-                data[i] = data[i].resample(resample_rule).mean()
+            
+            print('Original shape: {}'.format(data[i].shape))
+
+            data[i] = data[i].resample(resample_rule).mean().interpolate(method='time')
+            # test[i] = data[i]
 
             data[i] = data[i]['85m_speed'].values
-            # print(data[i].shape)
+            nans = 0
+            for j in range(data[i].shape[0]):
+                if np.isnan(data[i][j]):
+                    nans += 1
+            print('nans: {}'.format(nans))
+            print('Resample data shape: {}'.format(data[i].shape))
+            
+            if n_rows:
+                data[i] = data[i][:n_rows]
+                
+            print('Final shape: {}'.format(data[i].shape))
 
     data = np.stack(data, axis=0)
-
-    print(data.shape)
     
     # test = data
     
