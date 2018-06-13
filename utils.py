@@ -138,3 +138,54 @@ def val_loglhood(theta,Y0,X,flag_print):
             print(CovU)
         
     return val
+
+    def gibbs_sampling(iters, data_path, K, p, q, n_rows=None, debug=False):
+    """
+    data_path: path where data is saved.
+    K: number of plants (n_plants in load_data function).
+    p: time interval to consider.
+    q: sample distribution for parameters.
+    """
+    if debug:
+        print('Loading data...')
+    Y0, X = load_data(data_path, K, p, resample_rule='10T', n_rows=n_rows)
+    if debug:
+        print('Y0 shape: {}'.format(Y0.shape))
+        print('X shape: {}'.format(X.shape))
+    theta = init_parameters(K, p, q, Y0, X, debug)
+    if debug:
+        print('Parameters intialized!')
+    samples = []
+    for i in range(iters):
+        if debug:
+            print('Iteration {}'.format(i))
+        for j in range(theta.shape[0]):
+            while True:
+                theta[j] = q.rvs()
+                lk = val_loglhood(theta, Y0, X, False)
+                if lk != -np.inf:
+                    break
+        A    = np.reshape(theta[:p*K**2],(K*p,K)).swapaxes(0,1)
+        CovU = np.reshape(theta[p*K**2:],(K,K)).swapaxes(0,1)
+        samples.append([A, CovU])
+    print('Finished!')
+    return samples
+        
+    
+def init_parameters(K, p, q, Y0, X, debug=False):
+    if debug:
+        print('Initializing parameters...')
+    while True:
+        theta = np.zeros(K ** 2 * (p + 1))
+        for i in range(theta.shape[0]):
+            theta[i] = q.rvs()
+
+        # Force CovU to be positive semidefinite.
+        covu = np.reshape(theta[-K**2:], (K, K)).T
+        covu = np.dot(covu.T, covu)
+        theta[-K**2:] = np.reshape(covu, K**2)
+        
+        lk = val_loglhood(theta, Y0, X, False)
+        print('LK = {}'.format(lk))
+        if lk != -np.inf:
+            return theta
