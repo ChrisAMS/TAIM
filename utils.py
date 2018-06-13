@@ -1,6 +1,9 @@
 import pandas as pd
 import numpy as np
 import os
+import matplotlib.pyplot as plt
+from scipy.optimize import curve_fit
+import scipy.stats as stats
 
 
 def load_data(data_path, n_plants, p, resample_rule='10T', n_rows=None):
@@ -99,10 +102,11 @@ def val_loglhood(theta,Y0,X,flag_print):
     #se re-construyen matrices A, CovU a partir de vector theta entregado
     A    = np.reshape(theta[:pv*Kv**2],(Kv*pv,Kv)).swapaxes(0,1)
     CovU = np.reshape(theta[pv*Kv**2:],(Kv,Kv)).swapaxes(0,1)
+    CovU = np.dot(CovU.T,CovU)
     
     #se chequea que la matriz CovU sea adecuada (semidefinida positiva)
     eig_val_U = np.linalg.eigvals(CovU)
-    flag_sdp  = np.all(eig_val_U >= 0) #valores propios no negativos
+    flag_sdp  = np.all(eig_val_U >= 0) and np.all(np.isreal(eig_val_U)) #valores propios no negativos y reales 
     
     #se chequea que la matriz A sea adecuada (proceso estable, pag 15 Lutkepohl)
     if(pv==1): #no es necesario agregar bloque 
@@ -139,7 +143,7 @@ def val_loglhood(theta,Y0,X,flag_print):
         
     return val
 
-    def gibbs_sampling(iters, data_path, K, p, q, n_rows=None, debug=False):
+def gibbs_sampling(iters, data_path, K, p, q, n_rows=None, debug=False):
     """
     data_path: path where data is saved.
     K: number of plants (n_plants in load_data function).
@@ -167,6 +171,8 @@ def val_loglhood(theta,Y0,X,flag_print):
                     break
         A    = np.reshape(theta[:p*K**2],(K*p,K)).swapaxes(0,1)
         CovU = np.reshape(theta[p*K**2:],(K,K)).swapaxes(0,1)
+        CovU = np.dot(CovU.T,CovU)
+        
         samples.append([A, CovU])
     print('Finished!')
     return samples
@@ -189,3 +195,75 @@ def init_parameters(K, p, q, Y0, X, debug=False):
         print('LK = {}'.format(lk))
         if lk != -np.inf:
             return theta
+
+
+def sim_wind(A,CovU,x0,horizon,n_samples):
+    #Simula trayectorias de viento
+    #A: Matriz de coeficientes de acuerdo a Lutkepohl
+    #CovU: Matriz de covarianza ruido U de acuerdo a Lutkhepol
+    #x0: puntos de partida a partir del cual se genera el pronostico
+    #horizon: horizonte de tiempo hasta el cual se genera el pronostico
+    #n_samples: numero de trayectorias a generar
+    #x[t] = A_1 x[t-1] + ... + A_p x[t-p] + u[t]
+    #A = [A_1,...,A_p]
+    #u[t] Normal(0,CovU)
+    #x0 = [x[t-1];...;x[t-p]] (; indica abajo, no a la derecha, i.e. formato MATLAB)
+    #Formato salida: lista xt[t], donde t corresponde al t-step ahead forecast
+    #Cada componente de la lista xt[t] almacena una matriz de dimension (K x n_samples)
+    
+    #Dimensiones son obtenidas a partir de matrices A, CovU
+    Kv = CovU.shape[0] #K (dimension x, i.e. numero centrales)
+    pv = int(A.shape[1]/Kv) #p (orden modelo VAR(p))
+    
+    #Se chequea consistencia con dimensiones x0 (K x p)
+    flag_x0 = (x0.shape[0]==(Kv*pv)) and (x0.shape[1]==1)
+    if(not(flag_x0)):
+        print("ERROR: Las dimensiones de x0 no son consistentes con A,CovU")
+        
+    #Se chequea horizonte > 0
+    if(horizon<1):
+        print("ERROR: El horizonte debe ser mayor a 0")
+     
+    #Simulacion iterativa para todo el horizonte
+    xt = np.zeros((Kv,n_samples,horizon))
+    x_prev = np.repeat(x0,n_samples,axis=1) #xt de tiempo/iteracion anterior
+    #xt_old = []
+    for t in range(horizon):
+        #generacion ruido aleatorio
+        samples = np.random.multivariate_normal(np.zeros(Kv),CovU,size=n_samples)
+        
+        #modelo VAR(p)
+        calc_xt = (A @ x_prev) + np.transpose(samples)
+        xt[:,:,t] = calc_xt
+        #xt_old.append(calc_xt)
+        
+        #actualiza x_prev
+        x_prev = x_prev[:(Kv*(pv-1)),:]
+        x_prev = np.concatenate((calc_xt,x_prev))
+        
+    return xt
+
+def plot_series(xt):
+    #Recibe lista xt con pronosticos generados de sim_wind y
+    #reordena los datos. Finalmente grafica los resultados.
+    
+    dim_series = xt.shape[0] #dimension de series de tiempo
+    n_samples  = xt.shape[1] #numero de trayectorias generadas
+    horizon    = xt.shape[2] #horizonte pronostico
+    
+    f, axarr = plt.subplots(dim_series,sharex=True)
+    for i in range(dim_series):
+        for k in range(n_samples):
+            axarr[i].plot(xt[i,k,:])
+    plt.show()
+
+def PL5(u,a,b,c,d,g):    
+    val = d + (a-d)/((1+(u/c)**b)**g)
+    return val
+
+
+def power_curve(u,cap_wind):
+    val = PL5(u,a,b,c,d,g)
+    val = cap_wind*val
+    #wind cut-in and cut-out speed still missing
+    return val
