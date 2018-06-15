@@ -13,36 +13,22 @@ def load_data(data_path, n_plants, p, resample_rule='10T', n_rows=None):
     resample: resample rule for data aggregation.
     """
     data = [None] * n_plants
-    # test = [None] * n_plants
     for path, _, file_names in os.walk(data_path):
-        for i, file_name in enumerate(file_names):
+        for i in range(len(file_names)):
             if i + 1 > n_plants:
                 break
-            print('File "{}" loaded!'.format(file_name))
-            data[i] = pd.read_csv(os.path.join(data_path, file_name),\
+
+            data[i] = pd.read_csv(os.path.join(data_path, 'plant_{}.csv'.format(i)),\
                                   index_col=0, names=['85m_speed'], parse_dates=True)
-            
-            print('Original shape: {}'.format(data[i].shape))
 
             data[i] = data[i].resample(resample_rule).mean().interpolate(method='time')
-            # test[i] = data[i]
 
             data[i] = data[i]['85m_speed'].values
-            nans = 0
-            for j in range(data[i].shape[0]):
-                if np.isnan(data[i][j]):
-                    nans += 1
-            print('nans: {}'.format(nans))
-            print('Resample data shape: {}'.format(data[i].shape))
             
             if n_rows:
                 data[i] = data[i][:n_rows]
-                
-            print('Final shape: {}'.format(data[i].shape))
 
     data = np.stack(data, axis=0)
-    
-    # test = data
     
     if p > 0:
         X = np.zeros((n_plants * p, data.shape[1] - p))
@@ -147,38 +133,47 @@ def gibbs_sampling(iters, data_path, K, p, q, n_rows=None, debug=False):
     """
     data_path: path where data is saved.
     K: number of plants (n_plants in load_data function).
-    p: time interval to consider.
+    p: past time to be considered.
     q: sample distribution for parameters.
     """
-    if debug:
-        print('Loading data...')
+
+    print('Loading data...')
     Y0, X = load_data(data_path, K, p, resample_rule='10T', n_rows=n_rows)
     if debug:
         print('Y0 shape: {}'.format(Y0.shape))
         print('X shape: {}'.format(X.shape))
+    
+    # Theta is the vector of all parameters that will be sampled.
+    # A and CovU are reshaped un a 1-D vector theta.
     theta = init_parameters(K, p, q, Y0, X, debug)
     if debug:
         print('Parameters intialized!')
     samples = []
     for i in range(iters):
-        if debug:
-            print('Iteration {}'.format(i))
+        print('Iteration {}'.format(i))
+        
+        # Loop over all parameters and calculate the logLK of the parameters
+        # given all others.
         for j in range(theta.shape[0]):
             while True:
                 theta[j] = q.rvs()
-                lk = val_loglhood(theta, Y0, X, False)
+                lk = val_loglhood(theta, Y0, X, debug)
                 if lk != -np.inf:
                     break
         A    = np.reshape(theta[:p*K**2],(K*p,K)).swapaxes(0,1)
         CovU = np.reshape(theta[p*K**2:],(K,K)).swapaxes(0,1)
         CovU = np.dot(CovU.T,CovU)
-        
         samples.append([A, CovU])
     print('Finished!')
     return samples
         
     
 def init_parameters(K, p, q, Y0, X, debug=False):
+    """
+    Initialization of parameters. This functions search a matrix A
+    and a matrix CovU that satisfy some conditions that A and CovU
+    must satisfy.
+    """
     if debug:
         print('Initializing parameters...')
     while True:
@@ -191,8 +186,9 @@ def init_parameters(K, p, q, Y0, X, debug=False):
         covu = np.dot(covu.T, covu)
         theta[-K**2:] = np.reshape(covu, K**2)
         
-        lk = val_loglhood(theta, Y0, X, False)
-        print('LK = {}'.format(lk))
+        lk = val_loglhood(theta, Y0, X, debug)
+        if debug:
+            print('LK = {}'.format(lk))
         if lk != -np.inf:
             return theta
 
