@@ -251,6 +251,10 @@ def plot_series(xt):
     for i in range(dim_series):
         for k in range(n_samples):
             axarr[i].plot(xt[i,k,:])
+            axarr[i].set_ylabel('Wind Speed')
+            axarr[i].set_xlabel('Time')
+    plt.subplots_adjust(left=None, bottom=None, right=3, top=2,
+                wspace=None, hspace=0.25)
     plt.show()
 
 def PL5(u,a,b,c,d,g):    
