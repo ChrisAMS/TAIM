@@ -262,8 +262,10 @@ def PL5(u,a,b,c,d,g):
     return val
 
 
-def power_curve(u,cap_wind):
-    val = PL5(u,a,b,c,d,g)
+def power_curve(u,cap_wind,cut_speed,a,b,c,d,g):
+    #negative values and values over cut out speed are equal to zero
+    val = np.zeros(u.shape)          #output array
+    filt_speed = (u>0)&(u<cut_speed) #wind speed for which power curve is different from zero
+    val[filt_speed] = PL5(u[filt_speed],a,b,c,d,g)
     val = cap_wind*val
-    #wind cut-in and cut-out speed still missing
     return val
