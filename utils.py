@@ -159,7 +159,14 @@ def gibbs_sampling(iters, data_path, K, p, q, mh_iters=1, n_rows=None, debug=Fal
     # Theta is the vector of all parameters that will be sampled.
     # A and CovU are reshaped to a 1-D vector theta.
     # Note that this theta change dimensionality when using personalized.
+    print('Initializing parameters...')
     theta = init_parameters(K, p, q, Y0, X, debug=debug, method=method)
+    
+    print('Calculating MLE...')
+    f = lambda theta: -val_loglhood(theta,Y0,X,False, method=method, init_params=False)
+    result = minimize(f, theta)
+    theta = result.x
+    print('Init MLE theta calculated! ({})'.format(result.fun))
 
     if debug:
         print('Parameters intialized!')
@@ -178,6 +185,9 @@ def gibbs_sampling(iters, data_path, K, p, q, mh_iters=1, n_rows=None, debug=Fal
             # When mh_iters > 1, mh_samples contain mh_iters samples, so a random
             # choice (uniform) is done for selection of the new theta.
             theta[j] = np.random.choice(mh_samples)
+        
+        lk = val_loglhood(theta,Y0,X,False, method=method, init_params=False)
+        print('LK of new theta: {}'.format(lk))
 
         if p == 1 and method == 'personalized':
             A, CovU = reconstruct_coefs(theta, K)
@@ -202,7 +212,7 @@ def metropolis_hastings(theta, j, q, iters, Y0, X, K, debug, method='normal'):
     user_std = 1
     samples_mh = [theta[j]] # start sample.
     lk_old = val_loglhood(theta, Y0, X, debug, method=method)
-    print('init lk: {}'.format(lk_old))
+    # print('init lk: {}'.format(lk_old))
     for t in range(iters):
         lk_new = -np.inf
         c = -1
