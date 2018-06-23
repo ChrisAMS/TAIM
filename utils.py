@@ -40,6 +40,7 @@ def load_data(data_path, n_plants, p, resample_rule='10T', n_rows=None):
     data = data[:, p:]
     return data, X
 
+
 ## Calculo matrices Y0,X para loglikehood
 def calc_Y0X(data): #data must have mean 0
     #Y0 is computed
@@ -53,6 +54,7 @@ def calc_Y0X(data): #data must have mean 0
     
     return {"Y0":Y0,"X":X}
 
+
 ## Calculo loglikehood (matricial)
 def loglhood(CovU,Y0,A,X):
     #Loglikehood accoring to Lutkepohl 2005
@@ -62,6 +64,7 @@ def loglhood(CovU,Y0,A,X):
     trace_mat = np.transpose(Y0 - A@X) @ np.linalg.inv(CovU) @ (Y0 - A@X)
     out = -(Y0.shape[1]/2)*np.log(np.linalg.det(CovU)) -1/2*np.trace(trace_mat) 
     return out 
+
 
 ## Calculo loglikehood (element-wise)
 def val_loglhood(theta,Y0,X,flag_print, method='normal', init_params=False):
@@ -133,46 +136,105 @@ def val_loglhood(theta,Y0,X,flag_print, method='normal', init_params=False):
         
     return val
 
-def gibbs_sampling(iters, data_path, K, p, q, n_rows=None, debug=False):
+
+def gibbs_sampling(iters, data_path, K, p, q, mh_iters=1, n_rows=None, debug=False, method='normal'):
     """
+    iters: quantity of samples of A and U.
     data_path: path where data is saved.
     K: number of plants (n_plants in load_data function).
     p: past time to be considered.
-    q: sample distribution for parameters.
+    q: jumping distribution for parameters (from scipy.stats).
+    mh_iters: haw many samples do with Metropolis Hastings.
+    n_rows: how many rows of the data to consider.
+    debug: debug mode.
+    method: normal - use a jumping distribution from scipy.stats
+            personalized - use the jumping distribution personalized by us.
     """
-
     print('Loading data...')
     Y0, X = load_data(data_path, K, p, resample_rule='10T', n_rows=n_rows)
     if debug:
         print('Y0 shape: {}'.format(Y0.shape))
         print('X shape: {}'.format(X.shape))
-    
+
     # Theta is the vector of all parameters that will be sampled.
-    # A and CovU are reshaped un a 1-D vector theta.
-    theta = init_parameters(K, p, q, Y0, X, debug)
+    # A and CovU are reshaped to a 1-D vector theta.
+    # Note that this theta change dimensionality when using personalized.
+    theta = init_parameters(K, p, q, Y0, X, debug=debug, method=method)
+
     if debug:
         print('Parameters intialized!')
     samples = []
     for i in range(iters):
+        start_it = time.time()
         print('Iteration {}'.format(i))
-        
-        # Loop over all parameters and calculate the logLK of the parameters
-        # given all others.
+
+        # Loop over all parameters and for each parameter theta[j],
+        # do a MH sampling over the distribution of theta[j] given theta[-j].
         for j in range(theta.shape[0]):
-            while True:
-                theta[j] = q.rvs()
-                lk = val_loglhood(theta, Y0, X, debug)
-                if lk != -np.inf:
-                    break
-        A    = np.reshape(theta[:p*K**2],(K*p,K)).swapaxes(0,1)
-        CovU = np.reshape(theta[p*K**2:],(K,K)).swapaxes(0,1)
-        CovU = np.dot(CovU.T,CovU)
+            start = time.time()
+            mh_samples = metropolis_hastings(theta, j, q, mh_iters, Y0, X, K, debug, method=method)
+            end = time.time()
+            print('Time for sampling theta[{}]: {}'.format(j, end - start))
+            # When mh_iters > 1, mh_samples contain mh_iters samples, so a random
+            # choice (uniform) is done for selection of the new theta.
+            theta[j] = np.random.choice(mh_samples)
+
+        if p == 1 and method == 'personalized':
+            A, CovU = reconstruct_coefs(theta, K)
+        else:
+            A    = np.reshape(theta[:p*K**2],(K*p,K)).swapaxes(0,1)
+            CovU = np.reshape(theta[p*K**2:],(K,K)).swapaxes(0,1)
+            CovU = np.dot(CovU.T,CovU)
+
         samples.append([A, CovU])
+        end_it = time.time()
+        print('Time for iteration {}: {}'.format(i, end_it - start_it))
     print('Finished!')
     return samples
+
+
+def metropolis_hastings(theta, j, q, iters, Y0, X, K, debug, method='normal'):
+    """
+    theta: theta vector with all parameters.
+    j: theta index of the parameter currently been sampled.
+    q: jumping distribution.
+    """
+    user_std = 1
+    samples_mh = [theta[j]] # start sample.
+    lk_old = val_loglhood(theta, Y0, X, debug, method=method)
+    print('init lk: {}'.format(lk_old))
+    for t in range(iters):
+        lk_new = -np.inf
+        c = -1
+        while lk_new == -np.inf:
+            c += 1
+            if method == 'normal':
+                x_new = q.rvs(loc=samples_mh[-1], scale=1)
+                theta[j] = x_new
+            elif method == 'personalized':
+                theta, q_eval_new, q_eval_old = jump_dst(theta, j, user_std, K)
+            lk_new = val_loglhood(theta, Y0, X, debug, method=method)
+            # print('new_lk: {}'.format(lk_new))
+        #print('Quantity of -np.infs: {}'.format(c))
+        if method == 'normal':
+            logalpha = min([lk_new - lk_old + np.log(q.pdf(samples_mh[-1], loc=x_new) \
+                                                     / q.pdf(x_new, loc=samples_mh[-1])), 0])
+        elif method == 'personalized':
+            logalpha = min([lk_new - lk_old + np.log(q_eval_old / q_eval_new), 0])
+        alpha = np.exp(logalpha)
+        u = stats.uniform.rvs()
+        if u < alpha:
+            #print('acepted')
+            samples_mh.append(theta[j])
+            lk_old = lk_new
+        else:
+            #print('rejected')
+            samples_mh.append(samples_mh[-1])
+            theta[j] = samples_mh[-1]
+    return np.array(samples_mh)
         
     
-def init_parameters(K, p, q, Y0, X, debug=False):
+def init_parameters(K, p, q, Y0, X, method='normal', debug=False):
     """
     Initialization of parameters. This functions search a matrix A
     and a matrix CovU that satisfy some conditions that A and CovU
@@ -190,11 +252,22 @@ def init_parameters(K, p, q, Y0, X, debug=False):
         covu = np.dot(covu.T, covu)
         theta[-K**2:] = np.reshape(covu, K**2)
         
-        lk = val_loglhood(theta, Y0, X, debug)
+        lk = val_loglhood(theta, Y0, X, debug, method=method, init_params=True)
         if debug:
             print('LK = {}'.format(lk))
         if lk != -np.inf:
-            return theta
+            print('lk init: {}'.format(lk))
+            if p == 1 and method == 'personalized':
+                A = np.reshape(theta[:p*K**2],(K*p,K)).swapaxes(0,1)
+                eig_valuesA, eig_vecA = np.linalg.eig(A)
+                eig_valuesB, eig_vecB = np.linalg.eig(covu)
+                theta = np.concatenate((eig_vecA.reshape(-1), eig_vecB.reshape(-1),
+                                        eig_valuesA, eig_valuesB))
+                if np.all(np.isreal(eig_valuesA)):
+                    break
+            else:
+                break
+    return theta
 
 #DISCLAIMER: CODED FOR VAR OF ORDER 1
 
