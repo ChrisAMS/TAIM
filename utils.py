@@ -5,6 +5,10 @@ import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
 import scipy.stats as stats
 
+from scipy.stats import uniform
+from scipy.stats import norm
+from scipy.stats import truncnorm
+
 
 def load_data(data_path, n_plants, p, resample_rule='10T', n_rows=None):
     """
@@ -17,19 +21,13 @@ def load_data(data_path, n_plants, p, resample_rule='10T', n_rows=None):
         for i in range(len(file_names)):
             if i + 1 > n_plants:
                 break
-
             data[i] = pd.read_csv(os.path.join(data_path, 'plant_{}.csv'.format(i)),\
                                   index_col=0, names=['85m_speed'], parse_dates=True)
-
             data[i] = data[i].resample(resample_rule).mean().interpolate(method='time')
-
             data[i] = data[i]['85m_speed'].values
-            
             if n_rows:
                 data[i] = data[i][:n_rows]
-
     data = np.stack(data, axis=0)
-    
     if p > 0:
         X = np.zeros((n_plants * p, data.shape[1] - p))
         j = 0
@@ -39,9 +37,7 @@ def load_data(data_path, n_plants, p, resample_rule='10T', n_rows=None):
             j += 1
     else:
         X = data
-    
     data = data[:, p:]
-    
     return data, X
 
 ## Calculo matrices Y0,X para loglikehood
@@ -68,7 +64,7 @@ def loglhood(CovU,Y0,A,X):
     return out 
 
 ## Calculo loglikehood (element-wise)
-def val_loglhood(theta,Y0,X,flag_print):
+def val_loglhood(theta,Y0,X,flag_print, method='normal', init_params=False):
     #theta: vector con coeficientes para A, CovU
     #flag_print: si se desea imprimir A, CovU para su revision
     #A     = [a_1,...,a_Kp], donde a_j corresponde a la columna j de A (j=1,...,Kp)
@@ -82,13 +78,21 @@ def val_loglhood(theta,Y0,X,flag_print):
     pv = int(X.shape[0]/Kv) #p (orden VAR)
     
     #se verifica que theta tenga las dimensiones correctas
-    if(not(theta.shape[0] == (pv*Kv**2 + Kv**2))):
-        print("ERROR: dimensiones theta no coinciden con Y0,X")
-        
+    if pv == 1 and method == 'personalized' and not init_params:
+        if(not(theta.shape[0] == (Kv*Kv*2+Kv*2))):
+            print("ERROR: dimensiones theta no coinciden con Y0,X")
+    else:
+        if(not(theta.shape[0] == (pv*Kv**2 + Kv**2))):
+            print("ERROR: dimensiones theta no coinciden con Y0,X")
+
     #se re-construyen matrices A, CovU a partir de vector theta entregado
-    A    = np.reshape(theta[:pv*Kv**2],(Kv*pv,Kv)).swapaxes(0,1)
-    CovU = np.reshape(theta[pv*Kv**2:],(Kv,Kv)).swapaxes(0,1)
-    CovU = np.dot(CovU.T,CovU)
+    if pv == 1 and method == 'personalized' and not init_params:
+        A, CovU = reconstruct_coefs(theta, Kv)
+    else:
+        A    = np.reshape(theta[:pv*Kv**2],(Kv*pv,Kv)).swapaxes(0,1)
+        CovU = np.reshape(theta[pv*Kv**2:],(Kv,Kv)).swapaxes(0,1)
+        CovU = np.dot(CovU.T,CovU)
+    
     
     #se chequea que la matriz CovU sea adecuada (semidefinida positiva)
     eig_val_U = np.linalg.eigvals(CovU)
@@ -191,6 +195,71 @@ def init_parameters(K, p, q, Y0, X, debug=False):
             print('LK = {}'.format(lk))
         if lk != -np.inf:
             return theta
+
+#DISCLAIMER: CODED FOR VAR OF ORDER 1
+
+## Jumping distribution of theta, conditioned on all values except index j
+def jump_dst(theta_old,j,user_std,K):
+    #theta_old: previous value of vector theta
+    #j: index for which dist is unconditioned
+    #user_std: size of step of jumping distribution
+    
+    dt = 0.0001 #avoid exactly taking limits of bounds
+
+    mu = theta_old[j]
+    theta = theta_old.copy()
+
+    # q_eval_new is q(x_new | x_old).
+    # q_eval_old is q(x_old | x_new).
+
+    if (j < (K*K*2)):
+        # rv = norm(loc=mu,scale=user_std)
+        theta[j] = norm.rvs(loc=mu, scale=user_std)
+        q_eval_new = norm.pdf(theta[j], loc=mu, scale=user_std)
+        q_eval_old = norm.pdf(mu, loc=theta[j], scale=user_std)
+    elif ( (j >= (K*K*2)) and (j < (K*K*2+K)) ):
+        # a, b = (-1+dt - mu) / user_std, (1-dt - mu) / user_std
+        # rv = truncnorm(a=a,b=b,loc=mu,scale=user_std) #bounded between (-1,1)
+        a_new, b_new = (-1+dt - mu) / user_std, (1-dt - mu) / user_std
+        theta[j] = truncnorm.rvs(a=a_new, b=b_new, loc=mu, scale=user_std)
+        a_old, b_old = (-1+dt - theta[j]) / user_std, (1-dt - theta[j]) / user_std
+        q_eval_new = truncnorm.pdf(a=a_new, b=b_new, loc=mu, scale=user_std)
+        q_eval_old = truncnorm.pdf(a=a_old, b=b_old, loc=theta[j], scale=user_std)
+    elif ( (j >= (K*K*2+K)) and (j < (K*K*2+K*2)) ):
+        # a  = (0+dt - mu) / user_std
+        # rv = truncnorm(a=a,b=np.inf,loc=mu,scale=user_std) #bounded between (0,+inf)
+        a_new = (0+dt - mu) / user_std
+        theta[j] = truncnorm(a=a_new, b=np.inf, loc=mu, scale=user_std)
+        a_old = (0+dt - theta[j]) / user_std
+        q_eval_new = truncnorm.pdf(a=a_new, b=np.inf, loc=mu, scale=user_std)
+        q_eval_old = truncnorm.pdf(a=a_old, b=np.inf, loc=theta[j], scale=user_std)
+    else:
+        print("ERROR: index j out of bounds")
+
+    # theta = theta_old.copy()
+    # theta[j] = rv.rvs()
+    # q_eval = rv.pdf(theta[j])
+
+    # samp_vecA = np.reshape(theta[:(K*K)],(K,K))
+    # samp_vecU = np.reshape(theta[(K*K):(K*K*2)],(K,K))
+    # samp_valA = np.diag(theta[(K*K*2):(K*K*2+K)])
+    # samp_valU = np.diag(theta[(K*K*2+K):(K*K*2+K*2)])
+
+    # A = samp_vecA @ samp_valA @np.linalg.inv(samp_vecA)
+    # U = samp_vecU @ samp_valU @np.linalg.inv(samp_vecU)
+    
+    return(theta, q_eval_new, q_eval_old)
+
+
+def reconstruct_coefs(theta, K):
+    samp_vecA = np.reshape(theta[:(K*K)],(K,K))
+    samp_vecU = np.reshape(theta[(K*K):(K*K*2)],(K,K))
+    samp_valA = np.diag(theta[(K*K*2):(K*K*2+K)])
+    samp_valU = np.diag(theta[(K*K*2+K):(K*K*2+K*2)])
+
+    A = samp_vecA @ samp_valA @np.linalg.inv(samp_vecA)
+    U = samp_vecU @ samp_valU @np.linalg.inv(samp_vecU)
+    return A, U
 
 
 def sim_wind(A,CovU,x0,horizon,n_samples):
