@@ -1,8 +1,9 @@
 import pandas as pd
 import numpy as np
 import os
+import time
 import matplotlib.pyplot as plt
-from scipy.optimize import curve_fit
+from scipy.optimize import curve_fit, minimize
 import scipy.stats as stats
 
 from scipy.stats import uniform
@@ -137,7 +138,7 @@ def val_loglhood(theta,Y0,X,flag_print, method='normal', init_params=False):
     return val
 
 
-def gibbs_sampling(iters, data_path, K, p, q, mh_iters=1, n_rows=None, debug=False, method='normal'):
+def gibbs_sampling(iters, data_path, K, p, q, mh_iters=1, init_mle=False, n_rows=None, debug=False, method='normal'):
     """
     iters: quantity of samples of A and U.
     data_path: path where data is saved.
@@ -162,11 +163,12 @@ def gibbs_sampling(iters, data_path, K, p, q, mh_iters=1, n_rows=None, debug=Fal
     print('Initializing parameters...')
     theta = init_parameters(K, p, q, Y0, X, debug=debug, method=method)
     
-    print('Calculating MLE...')
-    f = lambda theta: -val_loglhood(theta,Y0,X,False, method=method, init_params=False)
-    result = minimize(f, theta)
-    theta = result.x
-    print('Init MLE theta calculated! ({})'.format(result.fun))
+    if init_mle:
+        print('Calculating MLE...')
+        f = lambda theta: -val_loglhood(theta,Y0,X,False, method=method, init_params=False)
+        result = minimize(f, theta)
+        theta = result.x
+        print('Init MLE theta calculated! ({})'.format(-result.fun))
 
     if debug:
         print('Parameters intialized!')
@@ -181,7 +183,7 @@ def gibbs_sampling(iters, data_path, K, p, q, mh_iters=1, n_rows=None, debug=Fal
             start = time.time()
             mh_samples = metropolis_hastings(theta, j, q, mh_iters, Y0, X, K, debug, method=method)
             end = time.time()
-            print('Time for sampling theta[{}]: {}'.format(j, end - start))
+            # print('Time for sampling theta[{}]: {}'.format(j, end - start))
             # When mh_iters > 1, mh_samples contain mh_iters samples, so a random
             # choice (uniform) is done for selection of the new theta.
             theta[j] = np.random.choice(mh_samples)
