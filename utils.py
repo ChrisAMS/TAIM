@@ -138,7 +138,7 @@ def val_loglhood(theta,Y0,X,flag_print, method='normal', init_params=False):
     return val
 
 
-def gibbs_sampling(iters, data_path, K, p, q, mh_iters=1, init_mle=False, n_rows=None, debug=False, method='normal'):
+def gibbs_sampling(iters, data_path, K, p, q, mh_iters=1, init_mle=False, n_rows=None, debug=False, method='normal', X=None, Y0=None):
     """
     iters: quantity of samples of A and U.
     data_path: path where data is saved.
@@ -151,8 +151,9 @@ def gibbs_sampling(iters, data_path, K, p, q, mh_iters=1, init_mle=False, n_rows
     method: normal - use a jumping distribution from scipy.stats
             personalized - use the jumping distribution personalized by us.
     """
-    print('Loading data...')
-    Y0, X = load_data(data_path, K, p, resample_rule='10T', n_rows=n_rows)
+    if X is None or Y0 is None:
+        print('Loading data...')
+        Y0, X = load_data(data_path, K, p, resample_rule='10T', n_rows=n_rows)
     if debug:
         print('Y0 shape: {}'.format(Y0.shape))
         print('X shape: {}'.format(X.shape))
@@ -163,13 +164,23 @@ def gibbs_sampling(iters, data_path, K, p, q, mh_iters=1, init_mle=False, n_rows
     print('Initializing parameters...')
     theta = init_parameters(K, p, q, Y0, X, debug=debug, method=method)
     
+    
     if init_mle:
         print('Calculating MLE...')
         f = lambda theta: -val_loglhood(theta,Y0,X,False, method=method, init_params=False)
         result = minimize(f, theta)
         theta = result.x
         print('Init MLE theta calculated! ({})'.format(-result.fun))
-
+    
+    if p == 1 and method == 'personalized':
+        A, CovU = reconstruct_coefs(theta, K)
+    else:
+        A    = np.reshape(theta[:p*K**2],(K*p,K)).swapaxes(0,1)
+        CovU = np.reshape(theta[p*K**2:],(K,K)).swapaxes(0,1)
+        CovU = np.dot(CovU.T,CovU)
+    print(A)
+    print(CovU)
+    
     if debug:
         print('Parameters intialized!')
     samples = []
@@ -215,13 +226,15 @@ def metropolis_hastings(theta, j, q, iters, Y0, X, K, debug, method='normal'):
     samples_mh = [theta[j]] # start sample.
     lk_old = val_loglhood(theta, Y0, X, debug, method=method)
     # print('init lk: {}'.format(lk_old))
+    accepted = 0
+    rejected = 0
     for t in range(iters):
         lk_new = -np.inf
         c = -1
         while lk_new == -np.inf:
             c += 1
             if method == 'normal':
-                x_new = q.rvs(loc=samples_mh[-1], scale=1)
+                x_new = q.rvs(loc=samples_mh[-1], scale=3)
                 theta[j] = x_new
             elif method == 'personalized':
                 theta, q_eval_new, q_eval_old = jump_dst(theta, j, user_std, K)
@@ -239,10 +252,14 @@ def metropolis_hastings(theta, j, q, iters, Y0, X, K, debug, method='normal'):
             #print('acepted')
             samples_mh.append(theta[j])
             lk_old = lk_new
+            accepted += 1
         else:
             #print('rejected')
+            rejected += 1
             samples_mh.append(samples_mh[-1])
             theta[j] = samples_mh[-1]
+    print('rejected: {}'.format(rejected))
+    print('accepted: {}'.format(accepted))
     return np.array(samples_mh)
         
     
