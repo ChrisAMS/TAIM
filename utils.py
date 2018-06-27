@@ -138,7 +138,8 @@ def val_loglhood(theta,Y0,X,flag_print, method='normal', init_params=False):
     return val
 
 
-def gibbs_sampling(iters, data_path, K, p, q, mh_iters=1, init_mle=False, n_rows=None, debug=False, method='normal', X=None, Y0=None):
+def gibbs_sampling(iters, data_path, K, p, q, mh_iters=1, init_mle=False, n_rows=None, debug=False,\
+                   method='normal', X=None, Y0=None, annealing=False, T=None, annealing_n=None):
     """
     iters: quantity of samples of A and U.
     data_path: path where data is saved.
@@ -150,6 +151,9 @@ def gibbs_sampling(iters, data_path, K, p, q, mh_iters=1, init_mle=False, n_rows
     debug: debug mode.
     method: normal - use a jumping distribution from scipy.stats
             personalized - use the jumping distribution personalized by us.
+    X, Y0: data to use directly without using load_data function.
+    annealing: boolean, use simulated annealing in MH.
+    T: simulated annealing decay function.
     """
     if X is None or Y0 is None:
         print('Loading data...')
@@ -192,7 +196,9 @@ def gibbs_sampling(iters, data_path, K, p, q, mh_iters=1, init_mle=False, n_rows
         # do a MH sampling over the distribution of theta[j] given theta[-j].
         for j in range(theta.shape[0]):
             start = time.time()
-            mh_samples = metropolis_hastings(theta, j, q, mh_iters, Y0, X, K, debug, method=method)
+            mh_samples = metropolis_hastings(theta, j, q, mh_iters, Y0, X, K, debug,\
+                                             method=method, annealing=annealing, T=T,\
+                                             annealing_n=annealing_n)
             end = time.time()
             # print('Time for sampling theta[{}]: {}'.format(j, end - start))
             # When mh_iters > 1, mh_samples contain mh_iters samples, so a random
@@ -207,16 +213,15 @@ def gibbs_sampling(iters, data_path, K, p, q, mh_iters=1, init_mle=False, n_rows
         else:
             A    = np.reshape(theta[:p*K**2],(K*p,K)).swapaxes(0,1)
             CovU = np.reshape(theta[p*K**2:],(K,K)).swapaxes(0,1)
-            CovU = np.dot(CovU.T,CovU)
-
-        samples.append([A, CovU])
+        samples.append([A.copy(), CovU.copy()])
         end_it = time.time()
         print('Time for iteration {}: {}'.format(i, end_it - start_it))
     print('Finished!')
     return samples
 
 
-def metropolis_hastings(theta, j, q, iters, Y0, X, K, debug, method='normal'):
+def metropolis_hastings(theta, j, q, iters, Y0, X, K, debug, method='normal',\
+                        annealing=False, T=None, annealing_n=None):
     """
     theta: theta vector with all parameters.
     j: theta index of the parameter currently been sampled.
@@ -234,7 +239,7 @@ def metropolis_hastings(theta, j, q, iters, Y0, X, K, debug, method='normal'):
         while lk_new == -np.inf:
             c += 1
             if method == 'normal':
-                x_new = q.rvs(loc=samples_mh[-1], scale=3)
+                x_new = q.rvs(loc=samples_mh[-1], scale=1)
                 theta[j] = x_new
             elif method == 'personalized':
                 theta, q_eval_new, q_eval_old = jump_dst(theta, j, user_std, K)
@@ -242,10 +247,17 @@ def metropolis_hastings(theta, j, q, iters, Y0, X, K, debug, method='normal'):
             # print('new_lk: {}'.format(lk_new))
         #print('Quantity of -np.infs: {}'.format(c))
         if method == 'normal':
-            logalpha = min([lk_new - lk_old + np.log(q.pdf(samples_mh[-1], loc=x_new) \
-                                                     / q.pdf(x_new, loc=samples_mh[-1])), 0])
+            if annealing and t <= annealing_n:
+                logalpha = min([(T(t) ** -1) * (lk_new - lk_old + np.log(q.pdf(samples_mh[-1], loc=x_new) \
+                                / q.pdf(x_new, loc=samples_mh[-1]))), 0])
+            else:
+                logalpha = min([lk_new - lk_old + np.log(q.pdf(samples_mh[-1], loc=x_new) \
+                                / q.pdf(x_new, loc=samples_mh[-1])), 0])
         elif method == 'personalized':
-            logalpha = min([lk_new - lk_old + np.log(q_eval_old / q_eval_new), 0])
+            if annealing and t <= annealing_n:
+                logalpha = min([(T(t) ** -1) * (lk_new - lk_old + np.log(q_eval_old / q_eval_new)), 0])
+            else:
+                logalpha = min([lk_new - lk_old + np.log(q_eval_old / q_eval_new), 0])
         alpha = np.exp(logalpha)
         u = stats.uniform.rvs()
         if u < alpha:
@@ -258,8 +270,9 @@ def metropolis_hastings(theta, j, q, iters, Y0, X, K, debug, method='normal'):
             rejected += 1
             samples_mh.append(samples_mh[-1])
             theta[j] = samples_mh[-1]
-    print('rejected: {}'.format(rejected))
-    print('accepted: {}'.format(accepted))
+
+    print('accepted: {}%%'.format(accepted * 100 / (accepted + rejected)))
+    #print(samples_mh)
     return np.array(samples_mh)
         
     
