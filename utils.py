@@ -11,24 +11,47 @@ from scipy.stats import norm
 from scipy.stats import truncnorm
 
 
-def load_data(data_path, n_plants, p, resample_rule='10T', n_rows=None):
+def read_resample_data(data_path, plant_name, resample_rule, n_rows,\
+                       date_start=None, date_end=None):
+    print('Reading {}...'.format(plant_name))
+    data = pd.read_csv(os.path.join(data_path, plant_name),\
+                       index_col=0, names=['85m_speed'], parse_dates=True)
+    data = data.resample(resample_rule).mean().interpolate(method='time')
+    if date_start and date_end:
+        data = data[date_start:date_end]
+    data = data['85m_speed'].values
+    if n_rows:
+        data = data[:n_rows]
+    return data
+
+
+def load_data(data_path, n_plants, p, resample_rule='10T', n_rows=None,\
+              date_start=None, date_end=None, plant_names=None):
     """
     data_path: directory where the data is saved.
     n_plants: number of plants to load (K).
     resample: resample rule for data aggregation.
+    date_start: initial date of data (YYYY-MM).
+    date_end: end date of data (YYYY-MM).
+    plant_names: list with the eolic plants to load.
     """
-    data = [None] * n_plants
-    for path, _, file_names in os.walk(data_path):
-        for i in range(len(file_names)):
-            if i + 1 > n_plants:
-                break
-            data[i] = pd.read_csv(os.path.join(data_path, 'plant_{}.csv'.format(i)),\
-                                  index_col=0, names=['85m_speed'], parse_dates=True)
-            data[i] = data[i].resample(resample_rule).mean().interpolate(method='time')
-            data[i] = data[i]['85m_speed'].values
-            if n_rows:
-                data[i] = data[i][:n_rows]
+    if plant_names is not None:
+        data = [None] * len(plant_names)
+        for i, plant_name in enumerate(plant_names):
+            data[i] = read_resample_data(data_path, plant_name, resample_rule,\
+                                         n_rows, date_start=date_start, date_end=date_end)
+    else:    
+        data = [None] * n_plants
+        for path, _, file_names in os.walk(data_path):
+            for i in range(len(file_names)):
+                if i + 1 > n_plants:
+                    break
+                data[i] = read_resample_data(data_path, file_names[i], resample_rule,\
+                                             n_rows, date_start=date_start, date_end=date_end)
+    
     data = np.stack(data, axis=0)
+    #test_data = data
+    
     if p > 0:
         X = np.zeros((n_plants * p, data.shape[1] - p))
         j = 0
@@ -38,8 +61,11 @@ def load_data(data_path, n_plants, p, resample_rule='10T', n_rows=None):
             j += 1
     else:
         X = data
+    
     data = data[:, p:]
+    
     return data, X
+    #return data, X, test_data
 
 
 ## Calculo matrices Y0,X para loglikehood
@@ -139,7 +165,8 @@ def val_loglhood(theta,Y0,X,flag_print, method='normal', init_params=False):
 
 
 def gibbs_sampling(iters, data_path, K, p, q, mh_iters=1, init_mle=False, n_rows=None, debug=False,\
-                   method='normal', X=None, Y0=None, annealing=False, T=None, annealing_n=None):
+                   method='normal', X=None, Y0=None, annealing=False, T=None, annealing_n=None,\
+                   date_start=None, date_end=None, plant_names=None):
     """
     iters: quantity of samples of A and U.
     data_path: path where data is saved.
@@ -157,10 +184,10 @@ def gibbs_sampling(iters, data_path, K, p, q, mh_iters=1, init_mle=False, n_rows
     """
     if X is None or Y0 is None:
         print('Loading data...')
-        Y0, X = load_data(data_path, K, p, resample_rule='10T', n_rows=n_rows)
-    if debug:
-        print('Y0 shape: {}'.format(Y0.shape))
-        print('X shape: {}'.format(X.shape))
+        Y0, X = load_data(data_path, K, p, resample_rule='10T', n_rows=n_rows,\
+                          date_start=date_start, date_end=date_end, plant_names=plant_names)
+    print('Y0 shape: {}'.format(Y0.shape))
+    print('X shape: {}'.format(X.shape))
 
     # Theta is the vector of all parameters that will be sampled.
     # A and CovU are reshaped to a 1-D vector theta.
@@ -215,7 +242,9 @@ def gibbs_sampling(iters, data_path, K, p, q, mh_iters=1, init_mle=False, n_rows
             CovU = np.reshape(theta[p*K**2:],(K,K)).swapaxes(0,1)
         samples.append([A.copy(), CovU.copy()])
         end_it = time.time()
-        print('Time for iteration {}: {}'.format(i, end_it - start_it))
+        print('Time for iteration {0}: {1:.2f} segs.'.format(i, end_it - start_it))
+        remaining_time = ((end_it - start_it) * (iters - (i + 1))) / 60
+        print('Estimated remaining time: {0:.2f} mins.'.format(remaining_time))
     print('Finished!')
     return samples
 
@@ -271,7 +300,7 @@ def metropolis_hastings(theta, j, q, iters, Y0, X, K, debug, method='normal',\
             samples_mh.append(samples_mh[-1])
             theta[j] = samples_mh[-1]
 
-    print('accepted: {}%%'.format(accepted * 100 / (accepted + rejected)))
+    #print('accepted: {}%%'.format(accepted * 100 / (accepted + rejected)))
     #print(samples_mh)
     return np.array(samples_mh)
         
