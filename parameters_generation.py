@@ -2,7 +2,7 @@ from utils import gibbs_sampling
 import scipy.stats as stats
 import pickle
 
-PARAMETERS_PATH = '/home/chrisams/Documents/datasets/data_TAIM//samples_2_500.pickle'
+PARAMETERS_PATH = '/home/chrisams/Documents/datasets/data_TAIM/samples_2_500_500annealing.pickle'
 DATA_PATH = '/home/chrisams/Documents/datasets/data_TAIM/processed/'
 date_start = '2011-05'
 date_end = '2011-06'
@@ -21,7 +21,7 @@ n_rows = None # Number of rows of the data to load
 method = 'normal'
 init_mle = True
 annealing = True
-T0 = 300
+T0 = 500
 TF = 1
 annealing_n = 5
 X=None
